@@ -27,6 +27,8 @@
 
 > **本项目使用 AGPL-3.0 开源协议。** 与安卓版 [CYQawa/YunX](https://github.com/CYQawa/YunX)
 > 同属云析项目；若你使用了本项目的代码，请同样以 AGPL-3.0 开放源代码。
+>
+> macOS 第一版可以编译、运行并打出 `.dmg`。登录使用 Cookie 粘贴，不内嵌 Chromium。
 
 ## 简介
 

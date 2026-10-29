@@ -27,6 +27,7 @@ object WindowsKeepAwake {
     private val refs = AtomicInteger(0)
 
     fun acquire() {
+        if (!HostOs.isWindows) return
         if (refs.getAndIncrement() == 0) {
             executor.execute {
                 runCatching { Kernel32.INSTANCE.SetThreadExecutionState(ES_CONTINUOUS or ES_SYSTEM_REQUIRED) }
@@ -35,6 +36,7 @@ object WindowsKeepAwake {
     }
 
     fun release() {
+        if (!HostOs.isWindows) return
         if (refs.decrementAndGet() <= 0) {
             refs.set(0)
             executor.execute {

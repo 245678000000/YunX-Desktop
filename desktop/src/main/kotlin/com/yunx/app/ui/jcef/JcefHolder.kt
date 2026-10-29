@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.yunx.app.AppContext
+import com.yunx.app.util.HostOs
 import com.yunx.app.util.Log
 import me.friwi.jcefmaven.CefAppBuilder
 import org.cef.CefApp
@@ -46,6 +47,10 @@ object JcefHolder {
     private var initThread: Thread? = null
 
     fun initBlocking() {
+        if (HostOs.isMac) {
+            Log.i(TAG, "macOS 构建未包含 JCEF 原生库，使用 Cookie 粘贴登录")
+            return
+        }
         synchronized(lock) {
             if (browserReady) return
             var lastError: Throwable? = null
@@ -97,6 +102,7 @@ object JcefHolder {
      * 完成后 [browserReady] 置为 true，登录页自动切换为内嵌浏览器模式。
      */
     fun initInBackground() {
+        if (HostOs.isMac) return
         synchronized(lock) {
             if (browserReady) return
             if (initThread?.isAlive == true) return

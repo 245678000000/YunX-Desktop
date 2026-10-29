@@ -3,6 +3,7 @@ package com.yunx.app.data.gopeed
 import com.yunx.app.data.network.GitHubMirror
 import com.yunx.app.data.network.HttpClients
 import com.yunx.app.data.update.UpdateChecker
+import com.yunx.app.util.HostOs
 import com.yunx.app.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -80,14 +81,12 @@ object GopeedKernelProvisioner {
         val digest: String
     )
 
-    /** 本机对应的官方包架构后缀：x86_64 → amd64，aarch64 → arm64 */
-    private fun archSuffix(): String {
-        val arch = System.getProperty("os.arch").orEmpty().lowercase()
-        return when {
-            arch.contains("aarch64") || arch.contains("arm64") -> "arm64"
-            else -> "amd64"
-        }
-    }
+    /**
+     * 官方 web 内核包全名。`version` 使用 Release tag，已含 `v` 时不再加前缀。
+     * 例：`gopeed-web-v1.9.3-macos-arm64.zip`。
+     */
+    fun assetName(version: String, osName: String, osArch: String): String =
+        "$ASSET_PREFIX$version-${HostOs.gopeedOsToken(osName)}-${HostOs.gopeedArchToken(osArch)}$ASSET_ARCH_SUFFIX"
 
     /**
      * 查询官方最新 Release，拼出本机可用的内核计划。
@@ -98,12 +97,12 @@ object GopeedKernelProvisioner {
         val json = fetchLatestJson()
         val tag = json.optString("tag_name")
         if (tag.isBlank()) throw IllegalStateException("官方 Release 缺少版本号")
-        val wanted = "$ASSET_PREFIX$tag-windows-${archSuffix()}$ASSET_ARCH_SUFFIX"
+        val wanted = assetName(tag, System.getProperty("os.name").orEmpty(), System.getProperty("os.arch").orEmpty())
         val asset = json.optJSONArray("assets")?.let { arr ->
             (0 until arr.length())
                 .mapNotNull { arr.optJSONObject(it) }
                 .firstOrNull { it.optString("name").equals(wanted, ignoreCase = true) }
-        } ?: throw IllegalStateException("官方 Release（$tag）里没有 Windows 内核包 $wanted")
+        } ?: throw IllegalStateException("官方 Release（$tag）里没有内核包 $wanted")
         val direct = asset.optString("browser_download_url")
         if (direct.isBlank()) throw IllegalStateException("内核包缺少下载地址")
         Plan(

@@ -19,6 +19,7 @@ import com.yunx.app.ui.jcef.JcefHolder
 import com.yunx.app.ui.theme.ComposeEmptyActivityTheme
 import com.yunx.app.util.DarkMode
 import com.yunx.app.util.DesktopActions
+import com.yunx.app.util.HostOs
 import com.yunx.app.util.RenderApiChooser
 import com.yunx.app.util.SingleInstance
 import com.yunx.app.util.TrayManager
@@ -102,19 +103,18 @@ fun main(args: Array<String>) {
 
     // 诊断模式：--jcef-smoke [url]，创建内嵌浏览器加载页面并输出 Cookie 统计后退出
     if (args.contains("--jcef-smoke")) {
+        if (HostOs.isMac) {
+            println("macOS 构建未包含 JCEF 原生库")
+            return
+        }
         val url = args.firstOrNull { it.startsWith("http") } ?: "https://pan.quark.cn"
         runJcefSmoke(url)
         return
     }
 
     // 启动优化：JCEF（内嵌 Chromium）初始化耗时数秒、首次运行解包 200MB 更久，
-    // 若在主线程同步初始化会阻塞窗口显示。Windows/Linux 下改为窗口显示后后台初始化
-    // （CEF 消息循环由 CefApp 内部 Swing Timer 在 AWT EDT 泵动，与初始化线程无关）。
-    // macOS 受 AppKit 主线程约束，保持阻塞式初始化。
-    val isMac = System.getProperty("os.name", "").lowercase().contains("mac")
-    if (isMac) {
-        JcefHolder.initBlocking()
-    }
+    // 若在主线程同步初始化会阻塞窗口显示。Windows/Linux 下改为窗口显示后后台初始化。
+    // macOS 第一版不带 JCEF 原生库，不在启动时初始化，登录页保持 Cookie 粘贴。
 
     // 进程退出前尽力释放 JCEF
     Runtime.getRuntime().addShutdownHook(
@@ -146,8 +146,15 @@ fun main(args: Array<String>) {
             state = windowState,
             icon = remember { loadWindowIcon() },
         ) {
+            val windowTitleLogged = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
             androidx.compose.runtime.SideEffect {
                 mainWindow = window as? java.awt.Frame
+                if (windowTitleLogged.compareAndSet(false, true)) {
+                    com.yunx.app.util.Log.i(
+                        "YunX-Window",
+                        "shown title=${(window as? java.awt.Frame)?.title}"
+                    )
+                }
                 com.yunx.app.ui.components.PreviewFullscreen.windowState = windowState
                 // 退出全屏时恢复窗口矩形要用真实窗口（只靠 WindowState 不可靠）
                 com.yunx.app.ui.components.PreviewFullscreen.window = window
@@ -156,11 +163,13 @@ fun main(args: Array<String>) {
             }
             // 窗口出现后再后台启动 JCEF，登录页通过 browserReady 状态自动切换
             androidx.compose.runtime.LaunchedEffect(Unit) {
-                JcefHolder.initInBackground()
-                // 预热抖音解析用的隐藏浏览器：实测单次解析耗时几乎全在 Chromium
-                // 冷启动与 acrawler 挑战上（诊断日志 1.8~9.4s），提前把浏览器与站点
-                // Cookie 热起来，用户真正粘贴链接时即可省掉这段冷启动。
-                HeadlessWebView.prewarm("https://www.douyin.com/")
+                if (!HostOs.isMac) {
+                    JcefHolder.initInBackground()
+                    // 预热抖音解析用的隐藏浏览器：实测单次解析耗时几乎全在 Chromium
+                    // 冷启动与 acrawler 挑战上（诊断日志 1.8~9.4s），提前把浏览器与站点
+                    // Cookie 热起来，用户真正粘贴链接时即可省掉这段冷启动。
+                    HeadlessWebView.prewarm("https://www.douyin.com/")
+                }
             }
             // 启动淡入：窗口 displayable 后压 0 → 等内容就绪 → 渐入
             androidx.compose.runtime.LaunchedEffect(Unit) {

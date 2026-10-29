@@ -6,6 +6,18 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// 与 HostOs.javafxClassifier / gopeedOsToken 使用同一组字符串。Gradle 脚本不能引用尚未编译的 HostOs。
+val hostOsName = System.getProperty("os.name", "").lowercase()
+val hostOsArch = System.getProperty("os.arch", "")
+val isWindowsHost = hostOsName.contains("win")
+val isMacHost = hostOsName.contains("mac") || hostOsName.contains("darwin")
+val javafxClassifier = when {
+    isWindowsHost -> "win"
+    isMacHost && hostOsArch == "aarch64" -> "mac-aarch64"
+    isMacHost -> "mac"
+    else -> "linux"
+}
+
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
@@ -26,21 +38,25 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.9.0")
 
     // Room -> 纯 JDBC SQLite
-    // ★ 用裁剪后的本地 jar：官方包 13.6 MB，含六个平台的原生库，本项目只跑 Windows。
-    //   只保留 org/sqlite/native/Windows（x86/x86_64/arm/arm64），其余代码与 META-INF 原样保留。
-    implementation(files("libs/sqlite-jdbc-3.47.1.0-win.jar"))
+    // Windows 继续用裁过的本地 jar（只有 Windows 原生库）。
+    // macOS / Linux 用官方坐标，里面带对应平台的原生库。
+    if (isWindowsHost) {
+        implementation(files("libs/sqlite-jdbc-3.47.1.0-win.jar"))
+    } else {
+        implementation("org.xerial:sqlite-jdbc:3.47.1.0")
+    }
     // Android 内置 org.json 的 JVM 等价物
     implementation("org.json:json:20240303")
     // 主题种子色（material-color-utilities 无公开仓库坐标；从 material 1.14.0 AAR 解包 classes.jar 本地引入）
     implementation(files("libs/material-color-utilities-1.0.0.jar"))
 
     // JavaFX MediaView 播放器（M6）：JFXPanel 经 SwingPanel 嵌入 Compose。
-    // 版本跟随 jvmToolchain(17)；发布目标只有 Windows，直接用 :win classifier（jar 内含原生库，
-    // 首次运行由 JavaFX 自动解到用户目录缓存，jpackage 无需额外处理）
-    implementation("org.openjfx:javafx-base:17.0.13:win")
-    implementation("org.openjfx:javafx-graphics:17.0.13:win")
-    implementation("org.openjfx:javafx-media:17.0.13:win")
-    implementation("org.openjfx:javafx-swing:17.0.13:win")
+    // 版本跟随 jvmToolchain(17)。分类器按当前主机选择（win / mac / mac-aarch64 / linux），
+    // jar 内含原生库，首次运行由 JavaFX 自动解到用户目录缓存。
+    implementation("org.openjfx:javafx-base:17.0.13:$javafxClassifier")
+    implementation("org.openjfx:javafx-graphics:17.0.13:$javafxClassifier")
+    implementation("org.openjfx:javafx-media:17.0.13:$javafxClassifier")
+    implementation("org.openjfx:javafx-swing:17.0.13:$javafxClassifier")
 
     // GFM Markdown 渲染（README / 更新说明）。注意：必须停留在 0.33.x ——
     // 0.34.0 起改用 Compose 1.8+ 的 BasicText 签名（含 TextAutoSize），与项目锁定的
@@ -71,7 +87,10 @@ dependencies {
     //   发布包不随带这个 120MB 的 jar，改由打包脚本用 JcefNativesPacker 重压成
     //   app\jcef-natives.tar.xz（约 90MB，LZMA2），首次使用时由 JcefNativesInstaller 解开。
     //   见 portable-package.ps1 [2c/5] 与 ui/jcef/JcefNativesInstaller.kt。
-    implementation("me.friwi:jcef-natives-windows-amd64:jcef-1770317+cef-132.3.1+g144febe+chromium-132.0.6834.83")
+    // Mac 第一版不带 JCEF 原生库。Windows 构建仍打入原有的 amd64 包。
+    if (isWindowsHost) {
+        implementation("me.friwi:jcef-natives-windows-amd64:jcef-1770317+cef-132.3.1+g144febe+chromium-132.0.6834.83")
+    }
 
     // tar.xz 解压/压缩：CEF 原生库发布包（打包期压缩 + 运行期自解包）
     implementation("org.tukaani:xz:1.10")
@@ -176,6 +195,7 @@ fun findMsvcVcvars(): File? {
 }
 
 val compileDarkMode by tasks.registering(Exec::class) {
+    onlyIf { isWindowsHost }
     val vcvars = findMsvcVcvars()
     inputs.file(darkModeSrc)
     outputs.file(darkModeOut)
@@ -202,9 +222,11 @@ val compileDarkMode by tasks.registering(Exec::class) {
 
 // 开发运行（:desktop:run）时把 DLL 目录并入 java.library.path，并保留 JDK bin（jawt 等原生库）
 tasks.withType<JavaExec> {
-    dependsOn(compileDarkMode)
-    val jvmBin = File(System.getProperty("java.home"), "bin").absolutePath
-    systemProperty("java.library.path", "${nativeOutDir.absolutePath};$jvmBin")
+    if (isWindowsHost) {
+        dependsOn(compileDarkMode)
+        val jvmBin = File(System.getProperty("java.home"), "bin").absolutePath
+        systemProperty("java.library.path", "${nativeOutDir.absolutePath};$jvmBin")
+    }
 }
 
 // 收集运行时依赖 jar 路径（供便携版 app-image 打包）
@@ -234,7 +256,7 @@ compose.desktop {
     application {
         mainClass = "com.yunx.app.MainKt"
         nativeDistributions {
-            targetFormats(TargetFormat.Exe)
+            targetFormats(if (isMacHost) TargetFormat.Dmg else TargetFormat.Exe)
             // sqlite-jdbc 通过反射加载 java.sql.Driver，jlink 自动检测不到，必须显式声明；
             // jdk.httpserver 是视频预览的本地回环代理（com.sun.net.httpserver），
             // jdk.unsupported.desktop 是 JavaFX 与 Swing 互操作（JFXPanel 里的 jdk.swing.interop）——
@@ -243,6 +265,10 @@ compose.desktop {
             // 每用户安装（%LOCALAPPDATA%\Programs），无需管理员权限
             windows {
                 perUserInstall = true
+            }
+            macOS {
+                bundleID = "com.yunx.desktop"
+                dockName = "YunX"
             }
             packageName = "YunX-Desktop"
             packageVersion = appVersion
